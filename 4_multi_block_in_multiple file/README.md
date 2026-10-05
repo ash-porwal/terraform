@@ -482,6 +482,8 @@ and determines resource order from dependencies.
 
 ---
 
-## One-Line Summary
+## Additional info
 
-> Multiple Terraform files in the same directory are combined into one configuration, and `terraform plan` evaluates them together based on dependencies rather than filename order.
+> When a directory contains multiple Terraform configuration files, Terraform combines them into a single configuration. During `terraform plan`, it evaluates all the files together and determines the order of operations from resource dependencies, not from filenames.
+>
+> The plan output is not grouped by configuration filename. Resource changes are listed by resource address, and output values are displayed in alphabetical order of their output names.

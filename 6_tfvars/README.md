@@ -1,0 +1,591 @@
+# Terraform Notes - `.tfvars` Files
+
+## What is a `.tfvars` File?
+
+A `.tfvars` file (**Terraform variable definitions file**) is used to **assign values** to input variables that are already declared in `variable` blocks.
+
+In simple words:
+
+> `variables.tf` says **what inputs exist**.
+> `.tfvars` says **what values to use** for those inputs.
+
+```text
+variables.tf      -> Declaration (name, type, default, validation)
+# name if the file should always be terraform.tfvars, for auto detection otherwise use flag for other file names
+terraform.tfvars  -> Assignment (actual values)  
+```
+
+---
+
+## Why Do We Need `.tfvars` Files?
+
+Without a `.tfvars` file, we must either:
+
+- Depend on `default` values, or
+- Type values in the interactive prompt every time, or
+- Pass long `-var` flags on the command line
+
+All three get painful as the number of variables grows.
+
+With a `.tfvars` file:
+
+- All values are kept in **one clean file**
+- **No interactive prompts**
+- **Different files for different environments** (dev, test, prod)
+- **No quoting issues** with lists and maps on the command line (especially in PowerShell)
+- The **same Terraform code** is reused; only the values file changes
+
+---
+
+## Basic Example
+
+### `variables.tf` (declaration)
+
+```hcl
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+}
+
+variable "instance_type" {
+  description = "EC2 instance type"
+  type        = string
+  default     = "t2.micro"
+}
+
+variable "instance_count" {
+  description = "Number of instances"
+  type        = number
+}
+```
+
+### `terraform.tfvars` (assignment)
+
+```hcl
+environment    = "dev"
+instance_type  = "t3.small"
+instance_count = 2
+```
+
+### Run
+
+```bash
+terraform plan
+```
+
+Terraform automatically reads `terraform.tfvars`, so there is **no prompt** and no extra flag.
+
+---
+
+## Syntax Rules of a `.tfvars` File
+
+A `.tfvars` file contains **only variable assignments**:
+
+```hcl
+variable_name = value
+```
+
+### Rules to remember
+
+- Only `name = value` assignments. **No blocks** like `variable`, `resource`, or `output`.
+- The variable **must be declared** in a `variable` block somewhere in the root module.
+- Values must be **literal values**. You cannot reference `var.something`, `local.something`, or resources.
+- Comments are allowed: `#`, `//`, and `/* */`.
+- The value must match the variable's declared **type**.
+
+### Invalid examples
+
+```hcl
+# Not allowed - blocks are not allowed in tfvars
+variable "environment" {
+  default = "dev"
+}
+
+# Not allowed - references are not allowed in tfvars
+bucket_name = "${var.environment}-bucket"
+```
+
+> If you need a value built from other variables, do it in a `locals` block in your `.tf` files, not in `.tfvars`.
+
+---
+
+## Assigning Values for Every Variable Type
+
+### `variables.tf`
+
+```hcl
+variable "project_name"       { type = string }
+variable "instance_count"     { type = number }
+variable "enable_monitoring"  { type = bool }
+variable "availability_zones" { type = list(string) }
+variable "allowed_ports"      { type = set(number) }
+variable "instance_types"     { type = map(string) }
+
+variable "database" {
+  type = object({
+    engine  = string
+    storage = number
+    backup  = bool
+  })
+}
+```
+
+### `terraform.tfvars`
+
+```hcl
+# string
+project_name = "data-platform"
+
+# number
+instance_count = 3
+
+# bool
+enable_monitoring = true
+
+# list
+availability_zones = ["ap-south-1a", "ap-south-1b", "ap-south-1c"]
+
+# set
+allowed_ports = [22, 80, 443]
+
+# map
+instance_types = {
+  dev  = "t2.micro"
+  prod = "t3.large"
+}
+
+# object
+database = {
+  engine  = "postgres"
+  storage = 20
+  backup  = true
+}
+```
+
+> Lists and maps are much easier to write in a `.tfvars` file than on the command line, where quoting can break.
+
+---
+
+## Types of `.tfvars` Files
+
+### 1. Auto-loaded files (no flag needed)
+
+Terraform loads these **automatically** if they are present in the working directory:
+
+| File name | Format |
+|---|---|
+| `terraform.tfvars` | HCL |
+| `terraform.tfvars.json` | JSON |
+| `*.auto.tfvars` (e.g. `common.auto.tfvars`) | HCL |
+| `*.auto.tfvars.json` (e.g. `common.auto.tfvars.json`) | JSON |
+
+> Multiple `*.auto.tfvars` files are loaded in **alphabetical order of filename**. If two files set the same variable, the file that loads later wins.
+
+### 2. Custom files (flag needed)
+
+Any other name, such as `dev.tfvars` or `prod.tfvars`, is **not** loaded automatically. Pass it with `-var-file`:
+
+```bash
+terraform plan  -var-file="dev.tfvars"
+terraform apply -var-file="prod.tfvars"
+```
+
+The file can also be in another folder:
+
+```bash
+terraform plan -var-file="envs/prod.tfvars"
+```
+
+> **Common mistake:** Creating `dev.tfvars` and expecting Terraform to pick it up automatically. It will not. Either use `-var-file="dev.tfvars"` or rename it to `dev.auto.tfvars`.
+
+---
+
+## JSON Format: `.tfvars.json`
+
+The same values can be written in JSON. This is useful when values are generated by scripts or other tools.
+
+### `terraform.tfvars.json`
+
+```json
+{
+  "environment": "prod",
+  "instance_count": 3,
+  "enable_monitoring": true,
+  "availability_zones": ["ap-south-1a", "ap-south-1b"],
+  "instance_types": {
+    "dev": "t2.micro",
+    "prod": "t3.large"
+  }
+}
+```
+
+> JSON does not support comments. Use the HCL `.tfvars` format if you want comments.
+
+---
+
+## Environment-Specific `.tfvars` Files (Real-World Pattern)
+
+One codebase, multiple value files:
+
+```text
+terraform-project/
+├── providers.tf
+├── variables.tf
+├── main.tf
+├── outputs.tf
+└── envs/
+    ├── dev.tfvars
+    ├── test.tfvars
+    └── prod.tfvars
+```
+
+### `envs/dev.tfvars`
+
+```hcl
+environment    = "dev"
+instance_type  = "t2.micro"
+instance_count = 1
+```
+
+### `envs/prod.tfvars`
+
+```hcl
+environment    = "prod"
+instance_type  = "t3.large"
+instance_count = 3
+```
+
+### Run per environment
+
+```bash
+terraform plan -var-file="envs/dev.tfvars"
+terraform plan -var-file="envs/prod.tfvars"
+```
+
+> In real projects, each environment should also have its **own state**, for example a separate backend key or a separate workspace. Otherwise, switching from `dev.tfvars` to `prod.tfvars` against the same state would try to change the same resources.
+
+---
+
+## Using Multiple `-var-file` Flags
+
+You can pass more than one file. A common pattern is shared values plus environment-specific values:
+
+```bash
+terraform plan -var-file="common.tfvars" -var-file="prod.tfvars"
+```
+
+> When the same variable appears in multiple files, the file passed **later** on the command line wins. So `prod.tfvars` overrides `common.tfvars`.
+
+---
+
+## Variable Precedence (Where `.tfvars` Fits)
+
+From **lowest** to **highest** priority:
+
+```text
+1. default value in the variable block        (lowest)
+2. Environment variables (TF_VAR_*)
+3. terraform.tfvars
+4. terraform.tfvars.json
+5. *.auto.tfvars / *.auto.tfvars.json   (alphabetical order)
+6. -var and -var-file on the command line     (highest)
+```
+
+> If `-var` and `-var-file` are used together, whichever comes **later on the command line** wins.
+
+### Example
+
+```hcl
+# variables.tf
+variable "instance_type" {
+  default = "t2.micro"
+}
+```
+
+```hcl
+# terraform.tfvars
+instance_type = "t3.small"
+```
+
+```hcl
+# prod.tfvars
+instance_type = "t3.large"
+```
+
+| Command | Final value | Why |
+|---|---|---|
+| `terraform plan` | `t3.small` | `terraform.tfvars` overrides the default |
+| `terraform plan -var-file="prod.tfvars"` | `t3.large` | `-var-file` overrides `terraform.tfvars` |
+| `terraform plan -var-file="prod.tfvars" -var="instance_type=t3.xlarge"` | `t3.xlarge` | `-var` comes later on the command line |
+
+### Easy way to remember
+
+> **The closer the value is to the command you type, the higher its priority.**
+
+---
+
+## What Happens If a Variable Is in `.tfvars` but Not Declared?
+
+```hcl
+# terraform.tfvars
+region = "ap-south-1"     # but no variable "region" block exists
+```
+
+Terraform shows a **warning** like:
+
+```text
+Warning: Value for undeclared variable
+```
+
+> In a `.tfvars` file this is only a warning, but passing an undeclared variable with `-var` on the command line is an **error**. Either way, declare every variable you assign.
+
+---
+
+## What If a Required Variable Is Missing from `.tfvars`?
+
+If a variable has **no default** and no value from any source, Terraform **prompts** for it:
+
+```text
+var.instance_count
+  Enter a value:
+```
+
+In CI/CD (non-interactive mode), this becomes an **error**. Make sure your `.tfvars` file covers every required variable.
+
+To fail fast instead of prompting:
+
+```bash
+terraform plan -input=false -var-file="prod.tfvars"
+```
+
+---
+
+## Secrets and `.tfvars` Files
+
+`.tfvars` files are plain text. **Never commit secrets** such as passwords, keys, or tokens to Git.
+
+### Better options for secrets
+
+- `TF_VAR_` environment variables set in your terminal or CI/CD pipeline
+- A secrets manager such as AWS Secrets Manager, Azure Key Vault, or HashiCorp Vault
+- Mark the variable `sensitive = true` so it is hidden in CLI output
+
+```hcl
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+```
+
+**Linux / macOS:**
+
+```bash
+export TF_VAR_db_password="SuperSecret123"
+```
+
+**Windows PowerShell:**
+
+```powershell
+$env:TF_VAR_db_password = "SuperSecret123"
+```
+
+> `sensitive = true` only hides the value on screen. The value is still stored in the **state file**, so the state must be protected too.
+
+### Example-file pattern
+
+Commit a safe template and ignore the real file:
+
+```text
+terraform.tfvars.example   -> Committed (dummy values, shows what is needed)
+terraform.tfvars           -> Ignored by Git (real values)
+```
+
+### `terraform.tfvars.example`
+
+```hcl
+environment    = "dev"
+instance_count = 1
+db_password    = "<set-via-TF_VAR_db_password>"
+```
+
+### `.gitignore`
+
+```gitignore
+# Ignore real variable files that may contain secrets
+*.tfvars
+*.tfvars.json
+
+# Keep safe example templates
+!*.tfvars.example
+```
+
+> Some teams **do** commit non-secret environment files such as `dev.tfvars` and `prod.tfvars`. That is fine as long as they contain no secrets. Choose one approach per project and stay consistent.
+
+---
+
+## Hands-on Practice (No Cloud Account Needed)
+
+### `variables.tf`
+
+```hcl
+variable "my_name" {
+  type    = string
+  default = "Ashish"
+}
+
+variable "environment" {
+  type = string
+}
+
+variable "skills" {
+  type = list(string)
+}
+
+variable "regions" {
+  type = map(string)
+}
+```
+
+### `outputs.tf`
+
+```hcl
+output "intro" {
+  value = "Hi, I am ${var.my_name}, working in ${var.environment}."
+}
+
+output "skills" {
+  value = var.skills
+}
+
+output "current_region" {
+  value = var.regions[var.environment]
+}
+```
+
+### `terraform.tfvars`
+
+```hcl
+environment = "dev"
+skills      = ["Python", "PySpark", "AWS", "Terraform"]
+regions = {
+  dev  = "ap-south-1"
+  prod = "us-east-1"
+}
+```
+
+### `prod.tfvars`
+
+```hcl
+my_name     = "Ashish Porwal"
+environment = "prod"
+```
+
+### Try these
+
+```bash
+terraform init
+
+# 1. Uses terraform.tfvars automatically
+terraform plan
+
+# 2. prod.tfvars overrides matching values from terraform.tfvars
+terraform plan -var-file="prod.tfvars"
+
+# 3. -var overrides everything before it
+terraform plan -var-file="prod.tfvars" -var="my_name=Ashish P"
+```
+
+**What to observe:**
+
+- Run 1: `environment = dev`, `my_name = Ashish` (default)
+- Run 2: `environment = prod`, `my_name = Ashish Porwal`; `skills` and `regions` still come from `terraform.tfvars`
+- Run 3: same as Run 2, but `my_name = Ashish P`
+
+> Point 2 is important: `-var-file` does **not** replace `terraform.tfvars`. Both are loaded, and values in `prod.tfvars` override only the variables they set.
+
+---
+
+## Common Mistakes
+
+| Mistake | Fix |
+|---|---|
+| Expecting `dev.tfvars` to auto-load | Use `-var-file="dev.tfvars"` or rename to `dev.auto.tfvars` |
+| Writing `variable` blocks inside `.tfvars` | Only `name = value` assignments are allowed |
+| Using `var.x` or functions inside `.tfvars` | Use literal values; build derived values in `locals` |
+| Assigning a variable that isn't declared | Add a `variable` block in `variables.tf` |
+| Value type doesn't match the declaration | For example, use `3`, not `"three"`, for a `number` |
+| Committing secrets in `.tfvars` | Use `TF_VAR_` or a secrets manager, and ignore the file in Git |
+| Thinking `-var-file` disables `terraform.tfvars` | Both load; the later source wins per variable |
+| Using comments in `.tfvars.json` | JSON does not support comments |
+
+---
+
+## Interview Questions
+
+### Q1. What is a `.tfvars` file?
+
+> A `.tfvars` file assigns values to input variables that are declared in `variable` blocks. It keeps variable values separate from the Terraform code.
+
+### Q2. Difference between `variables.tf` and `terraform.tfvars`?
+
+> `variables.tf` **declares** variables (name, type, default, validation). `terraform.tfvars` **assigns** values to those variables.
+
+### Q3. Which `.tfvars` files are loaded automatically?
+
+> `terraform.tfvars`, `terraform.tfvars.json`, and any file ending in `.auto.tfvars` or `.auto.tfvars.json`.
+
+### Q4. How do you use a custom tfvars file like `prod.tfvars`?
+
+> Pass it explicitly with `terraform plan -var-file="prod.tfvars"`.
+
+### Q5. If both `terraform.tfvars` and `-var-file` set the same variable, which wins?
+
+> The `-var-file` value wins, because command-line options have the highest precedence.
+
+### Q6. If multiple `-var-file` flags set the same variable, which wins?
+
+> The file passed **later** on the command line.
+
+### Q7. Can you use expressions or `var.` references inside a `.tfvars` file?
+
+> No. `.tfvars` files accept only literal values. Derived values should be built with `locals` in the configuration.
+
+### Q8. How do you manage different environments with `.tfvars`?
+
+> Keep one codebase and create a separate file for each environment, such as `dev.tfvars` and `prod.tfvars`. Pass the right file with `-var-file`, and keep a separate state for each environment.
+
+### Q9. Should `.tfvars` files be committed to Git?
+
+> Non-secret values can be committed. Files containing secrets should never be committed. Use `TF_VAR_` environment variables or a secrets manager for those, and commit a `.tfvars.example` template instead.
+
+### Q10. What happens if a `.tfvars` file sets an undeclared variable?
+
+> Terraform shows a warning that a value was given for an undeclared variable. The variable must be declared in a `variable` block to be used.
+
+---
+
+## Quick Revision
+
+- `.tfvars` = **values**; `variables.tf` = **declarations**.
+- Only `name = value` lines; no blocks, no `var.` references, no functions.
+- Auto-loaded: `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars`, `*.auto.tfvars.json`.
+- Custom files such as `dev.tfvars` need `-var-file`.
+- `*.auto.tfvars` files load in alphabetical order.
+- Multiple `-var-file` flags: the later one wins.
+- Precedence: default < `TF_VAR_` < `terraform.tfvars` < `.tfvars.json` < `*.auto.tfvars` < CLI flags.
+- `-var-file` does not disable `terraform.tfvars`; both load.
+- Use separate files for each environment, with separate state.
+- Never commit secrets; use `TF_VAR_` or a secrets manager.
+
+---
+
+## One-Line Summary
+
+> A `.tfvars` file stores the values for declared Terraform input variables, so the same code can run with different settings per environment. `terraform.tfvars` and `*.auto.tfvars` load automatically, other files load with `-var-file`, and command-line values have the highest precedence.
+
+---
+
+## Official Reference
+
+- [Terraform Input Variables](https://developer.hashicorp.com/terraform/language/values/variables)
+- [Protect Sensitive Input Variables](https://developer.hashicorp.com/terraform/tutorials/configuration-language/sensitive-variables)
